@@ -2,8 +2,8 @@ package services
 
 import (
 	"log"
-	"net/http"
 	"math/rand/v2"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -28,7 +28,8 @@ type mockMyQueues struct {
 }
 
 // TODO: update the mockCreateQueue to contain time of attendance
-// 	TODO: queue will be created using key "queue:[the id]"
+//
+//	TODO: queue will be created using key "queue:[the id]"
 func CreateQueue(c *gin.Context) {
 	var req mockCreateQueue
 
@@ -58,15 +59,15 @@ func ReadQueue(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
-		})	
+		})
 		return
 	}
 
-	result, err := Rdb.ZRange(Ctx, req.ID, 1, -1).Result()
+	result, err := Rdb.ZRangeWithScores(Ctx, req.ID, 1, -1).Result()
 	if err != nil {
 		log.Fatalf("Failed to READ queue: %v", err)
 	}
-	
+
 	c.JSON(200, gin.H{
 		"result": result,
 	})
@@ -78,15 +79,15 @@ func DeleteQueue(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
-		})	
+		})
 		return
 	}
 
-	err := Rdb.ZDel(Ctx, req.ID).Err()
+	err := Rdb.Del(Ctx, req.ID).Err()
 	if err != nil {
 		log.Fatalf("Failed to READ queue: %v", err)
 	}
-	
+
 	c.JSON(200, gin.H{
 		"deleted": req.ID,
 	})
@@ -106,10 +107,10 @@ func RemoveMember(c *gin.Context) {
 	if err != nil {
 		log.Fatalf("Failed to READ queue: %v", err)
 	}
-	
+
 	c.JSON(200, gin.H{
 		"removed member": req.MemberID,
-		"from queue": req.ID,
+		"from queue":     req.ID,
 	})
 }
 
@@ -123,9 +124,9 @@ func JoinQueue(c *gin.Context) {
 		return
 	}
 
-	randomNumber := rand.Intn(50) + 1
+	randomNumber := rand.IntN(50) + 1
 	var members = []redis.Z{
-		{Score: randomNumber, Member: req.MemberID},
+		{Score: float64(randomNumber), Member: req.MemberID},
 	}
 	err := Rdb.ZAdd(Ctx, req.ID, members...).Err()
 	if err != nil {
@@ -133,16 +134,30 @@ func JoinQueue(c *gin.Context) {
 	}
 	c.JSON(201, gin.H{
 		"joined member": req.MemberID,
-		"to queue": req.ID,
+		"to queue":      req.ID,
 	})
 }
 
-func LeaveQueue() {
-	// var req mockMemberAction
+func LeaveQueue(c *gin.Context) {
+	var req mockMemberAction
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	err := Rdb.ZRem(Ctx, req.ID, req.MemberID).Err()
+	if err != nil {
+		log.Fatalf("Failed to leave queue: %v", err)
+	}
+
+	c.JSON(200, gin.H{
+		"left member": req.MemberID,
+		"from queue":  req.ID,
+	})
 }
 
 // store queue ids in client, use MyQueues to fetch some fields from
 // some queues
-func MyQueues() {
-	// var req mockMyQueues
-}

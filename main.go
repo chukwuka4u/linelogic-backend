@@ -40,6 +40,10 @@ func main() {
 
 	router.POST("/create-queue", services.CreateQueue)
 	router.POST("/read-queue", services.ReadQueue)
+	router.POST("/delete-queue", services.DeleteQueue)
+	router.POST("/remove-member", services.RemoveMember)
+	router.POST("/join-queue", services.JoinQueue)
+	router.POST("/leave-queue", services.LeaveQueue)
 
 	fmt.Println("Server running on port 8080...")
 	router.Run()
