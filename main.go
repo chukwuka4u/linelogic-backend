@@ -18,6 +18,7 @@ func init() {
 
 func main() {
 	services.RedisConnect()
+	services.PostGresConnect()
 
 	router := gin.Default()
 

@@ -19,7 +19,7 @@ func RedisConnect() {
 	}
 	Rdb = redis.NewClient(opt)
 
-	err = Rdb.Get(Ctx, "foo").Err()
+	err = Rdb.Ping(Ctx).Err()
 	if err != nil {
 		log.Fatal("Error connecting to Redis:", err)
 	}

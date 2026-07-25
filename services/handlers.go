@@ -1,17 +1,20 @@
 package services
 
 import (
+	"fmt"
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
 type mockCreateQueue struct {
-	QueueName string `json:"queueName" binding:"required"`
-	// AttendedBy string `json:"attendedBy" biding:"required"`
+	QueueName  string `json:"queueName" binding:"required"`
+	Department string `json:"department" binding:"required"`
 }
 
 type mockPassId struct {
@@ -27,137 +30,153 @@ type mockMyQueues struct {
 	IDList []string `json:"idList" binding:"required"`
 }
 
-// TODO: update the mockCreateQueue to contain time of attendance
-//
-//	TODO: queue will be created using key "queue:[the id]"
 func CreateQueue(c *gin.Context) {
 	var req mockCreateQueue
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var ch = make(chan string)
+	go func(pool *pgxpool.Pool) {
+		id, err := CreateQueueDB(req.QueueName, req.Department, pool)
+		if err != nil {
+			log.Printf("CreateQueueDB error: %v", err)
+			ch <- ""
+		} else {
+			ch <- id
+		}
+	}(DB)
+	id := <-ch
+	if id == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create queue in DB"})
 		return
 	}
 
-	var members = []redis.Z{
-		{Score: 0, Member: "system:init"},
-	}
-	err := Rdb.ZAdd(Ctx, req.QueueName, members...).Err()
+	queueKey := fmt.Sprintf("queue:%s", id)
+	members := []redis.Z{{Score: 0, Member: "system:init"}}
+	err := Rdb.ZAdd(Ctx, queueKey, members...).Err()
 	if err != nil {
-		log.Fatalf("Failed to create queue: %v", err)
+		log.Printf("Failed to create queue in Redis: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize queue"})
+		return
 	}
-	c.JSON(201, gin.H{
-		"created": req.QueueName,
+
+	c.JSON(http.StatusCreated, gin.H{
+		"created": queueKey,
+		"id":      id,
 	})
 }
 
-// TODO: passed the name as the id here, used as the queue key, refactor
 func ReadQueue(c *gin.Context) {
 	var req mockPassId
-
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := Rdb.ZRangeWithScores(Ctx, req.ID, 1, -1).Result()
+	queueKey := fmt.Sprintf("queue:%s", req.ID)
+	result, err := Rdb.ZRangeWithScores(Ctx, queueKey, 1, -1).Result()
 	if err != nil {
-		log.Fatalf("Failed to READ queue: %v", err)
+		log.Printf("Failed to read queue %s: %v", queueKey, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read queue"})
+		return
 	}
 
-	c.JSON(200, gin.H{
-		"result": result,
-	})
+	c.JSON(http.StatusOK, gin.H{"result": result})
 }
 
 func DeleteQueue(c *gin.Context) {
 	var req mockPassId
-
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	err := Rdb.Del(Ctx, req.ID).Err()
+	queueKey := fmt.Sprintf("queue:%s", req.ID)
+	err := Rdb.Del(Ctx, queueKey).Err()
 	if err != nil {
-		log.Fatalf("Failed to READ queue: %v", err)
+		log.Printf("Failed to delete queue %s: %v", queueKey, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete queue"})
+		return
 	}
 
-	c.JSON(200, gin.H{
-		"deleted": req.ID,
-	})
+	c.JSON(http.StatusOK, gin.H{"deleted": queueKey})
 }
 
 func RemoveMember(c *gin.Context) {
 	var req mockMemberAction
-
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	err := Rdb.ZRem(Ctx, req.ID, req.MemberID).Err()
+	queueKey := fmt.Sprintf("queue:%s", req.ID)
+	err := Rdb.ZRem(Ctx, queueKey, req.MemberID).Err()
 	if err != nil {
-		log.Fatalf("Failed to READ queue: %v", err)
+		log.Printf("Failed to remove member %s from queue %s: %v", req.MemberID, queueKey, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove member"})
+		return
 	}
 
-	c.JSON(200, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"removed member": req.MemberID,
-		"from queue":     req.ID,
+		"from queue":     queueKey,
 	})
 }
 
 func JoinQueue(c *gin.Context) {
 	var req mockMemberAction
-
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	queueID, err := strconv.Atoi(req.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue id must be a valid number"})
+		return
+	}
+
+	if err = JoinUpdateDB(queueID, req.MemberID); err != nil {
+		log.Printf("JoinUpdateDB error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record queue membership"})
 		return
 	}
 
 	randomNumber := rand.IntN(50) + 1
-	var members = []redis.Z{
-		{Score: float64(randomNumber), Member: req.MemberID},
-	}
-	err := Rdb.ZAdd(Ctx, req.ID, members...).Err()
+	members := []redis.Z{{Score: float64(randomNumber), Member: req.MemberID}}
+	queueKey := fmt.Sprintf("queue:%s", req.ID)
+	err = Rdb.ZAdd(Ctx, queueKey, members...).Err()
 	if err != nil {
-		log.Fatalf("Failed to create queue: %v", err)
+		log.Printf("Failed to add member to queue %s: %v", queueKey, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to join queue"})
+		return
 	}
-	c.JSON(201, gin.H{
+
+	c.JSON(http.StatusCreated, gin.H{
 		"joined member": req.MemberID,
-		"to queue":      req.ID,
+		"to queue":      queueKey,
 	})
 }
 
 func LeaveQueue(c *gin.Context) {
 	var req mockMemberAction
-
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	err := Rdb.ZRem(Ctx, req.ID, req.MemberID).Err()
+	queueKey := fmt.Sprintf("queue:%s", req.ID)
+	err := Rdb.ZRem(Ctx, queueKey, req.MemberID).Err()
 	if err != nil {
-		log.Fatalf("Failed to leave queue: %v", err)
+		log.Printf("Failed to leave queue %s: %v", queueKey, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to leave queue"})
+		return
 	}
 
-	c.JSON(200, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"left member": req.MemberID,
-		"from queue":  req.ID,
+		"from queue":  queueKey,
 	})
 }
-
-// store queue ids in client, use MyQueues to fetch some fields from
-// some queues
