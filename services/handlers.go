@@ -15,6 +15,7 @@ import (
 type mockCreateQueue struct {
 	QueueName  string `json:"queueName" binding:"required"`
 	Department string `json:"department" binding:"required"`
+	UserID     string `json:"user_id" binding:"required"`
 }
 
 type mockPassId struct {
@@ -39,7 +40,7 @@ func CreateQueue(c *gin.Context) {
 	}
 	var ch = make(chan string)
 	go func(pool *pgxpool.Pool) {
-		id, err := CreateQueueDB(req.QueueName, req.Department, pool)
+		id, err := CreateQueueDB(req.QueueName, req.Department, req.UserID, pool)
 		if err != nil {
 			log.Printf("CreateQueueDB error: %v", err)
 			ch <- ""
@@ -179,4 +180,13 @@ func LeaveQueue(c *gin.Context) {
 		"left member": req.MemberID,
 		"from queue":  queueKey,
 	})
+}
+
+func Migration(c *gin.Context) {
+	err := MigrateAction()
+	if err != nil {
+		log.Printf("migration failed %s", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "migration failed"})
+		return
+	}
 }

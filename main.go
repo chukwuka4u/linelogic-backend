@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/chukwuka4u/linelogic-backend/services"
+	"github.com/chukwuka4u/linelogic-backend/token"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -38,13 +40,28 @@ func main() {
 			"foo": val,
 		})
 	})
+	router.GET("/migrate", services.Migration)
+	router.POST("/sync-user", services.SyncUser)
+	router.POST("/login", services.Login)
 
-	router.POST("/create-queue", services.CreateQueue)
-	router.POST("/read-queue", services.ReadQueue)
-	router.POST("/delete-queue", services.DeleteQueue)
-	router.POST("/remove-member", services.RemoveMember)
-	router.POST("/join-queue", services.JoinQueue)
-	router.POST("/leave-queue", services.LeaveQueue)
+	sym_key := os.Getenv("TOKEN_SYMMETRIC_KEY")
+	tokenMaker, err := token.NewPasetoMaker(sym_key)
+	if err != nil {
+		log.Fatal("failed to create token maker:", err)
+	}
+
+	pasetoMaker, ok := tokenMaker.(*token.PasetoMaker)
+	if !ok {
+		log.Fatal("token maker is not a PasetoMaker")
+	}
+	authRouter := router.Group("/").Use(authMiddleware(pasetoMaker))
+
+	authRouter.POST("/create-queue", services.CreateQueue)
+	authRouter.POST("/read-queue", services.ReadQueue)
+	authRouter.POST("/delete-queue", services.DeleteQueue)
+	authRouter.POST("/remove-member", services.RemoveMember)
+	authRouter.POST("/join-queue", services.JoinQueue)
+	authRouter.POST("/leave-queue", services.LeaveQueue)
 
 	fmt.Println("Server running on port 8080...")
 	router.Run()

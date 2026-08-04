@@ -6,7 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func CreateQueueDB(name string, department string, pool *pgxpool.Pool) (string, error) {
+func CreateQueueDB(name string, department string, userID string, pool *pgxpool.Pool) (string, error) {
 	if pool == nil {
 		fmt.Println("Error: Received a nil database pool pointer!")
 		return "", fmt.Errorf("database pool is nil")
@@ -19,8 +19,8 @@ func CreateQueueDB(name string, department string, pool *pgxpool.Pool) (string, 
 
 	var id string
 	err = tx.QueryRow(Ctx,
-		`INSERT INTO queues (name, department) VALUES ($1, $2) RETURNING id`,
-		name, department,
+		`INSERT INTO queues (name, department, user_id) VALUES ($1, $2) RETURNING id`,
+		name, department, userID,
 	).Scan(&id)
 	if err != nil {
 		return "", err
@@ -53,5 +53,58 @@ func JoinUpdateDB(queueID int, userID string) error {
 		return fmt.Errorf("commit failed: %w", err)
 	}
 
+	return nil
+}
+
+func ValidUser(username string, userId string) (string, error) {
+	var id string
+	err := DB.QueryRow(Ctx,
+		`SELECT id FROM users WHERE id = $1 AND username = $2`,
+		userId, username,
+	).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func CreateUser(username string, userId string, phone string) (string, error) {
+	var id string
+	err := DB.QueryRow(Ctx,
+		`INSERT INTO users (username, id, phone) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING RETURNING id`,
+		username, userId, phone,
+	).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+var schema = `
+	CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		username VARCHAR(20) NOT NULL,
+		phone VARCHAR(20) NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS queues (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		name VARCHAR(20) NOT NULL,
+		department VARCHAR(20) NOT NULL,
+		status BOOLEAN NOT NULL DEFAULT false,
+		user_id TEXT NOT NULL,
+		CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_queues_user_id ON queues(user_id);
+`
+
+func MigrateAction() error {
+	_, err := DB.Exec(Ctx,
+		schema,
+	)
+	if err != nil {
+		return err
+	}
 	return nil
 }
