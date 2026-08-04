@@ -3,8 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/chukwuka4u/linelogic-backend/token"
 	"github.com/gin-gonic/gin"
@@ -55,4 +57,23 @@ func authMiddleware(tokenMaker *token.PasetoMaker) gin.HandlerFunc {
 		ctx.Set(authorizationPayloadKey, payload)
 		ctx.Next()
 	}
+}
+
+func startSelfPing(url string, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		client := &http.Client{Timeout: 10 * time.Second}
+
+		for range ticker.C {
+			resp, err := client.Get(url)
+			if err != nil {
+				log.Printf("self-ping failed: %v", err)
+				continue
+			}
+			resp.Body.Close()
+			log.Printf("self-ping ok: %d", resp.StatusCode)
+		}
+	}()
 }

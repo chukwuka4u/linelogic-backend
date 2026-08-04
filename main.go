@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/chukwuka4u/linelogic-backend/services"
 	"github.com/chukwuka4u/linelogic-backend/token"
@@ -62,6 +63,9 @@ func main() {
 	authRouter.POST("/remove-member", services.RemoveMember)
 	authRouter.POST("/join-queue", services.JoinQueue)
 	authRouter.POST("/leave-queue", services.LeaveQueue)
+
+	myapi := os.Getenv("MY_API")
+	startSelfPing(myapi+"/health", 10*time.Minute)
 
 	fmt.Println("Server running on port 8080...")
 	router.Run()
