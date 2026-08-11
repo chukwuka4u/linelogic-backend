@@ -56,11 +56,11 @@ func JoinUpdateDB(queueID int, userID string) error {
 	return nil
 }
 
-func ValidUser(username string, userId string) (string, error) {
+func ValidUser(username string, userId string, pool *pgxpool.Pool) (string, error) {
 	var id string
-	err := DB.QueryRow(Ctx,
-		`SELECT id FROM users WHERE id = $1 AND username = $2`,
-		userId, username,
+	err := pool.QueryRow(Ctx,
+		`SELECT id FROM users WHERE username = $1 AND id = $2`,
+		username, userId,
 	).Scan(&id)
 	if err != nil {
 		return "", err

@@ -6,6 +6,7 @@ import (
 
 	"github.com/chukwuka4u/linelogic-backend/token"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type mockLogin struct {
@@ -31,19 +32,19 @@ func Login(c *gin.Context) {
 	}
 
 	ch := make(chan ValidUserResult)
-	go func() {
-		id, err := ValidUser(req.UserId, req.Username)
+	go func(pool *pgxpool.Pool) {
+		id, err := ValidUser(req.Username, req.UserId, pool)
 		if err != nil {
 			ch <- ValidUserResult{ID: "", Err: err}
 		} else {
 			ch <- ValidUserResult{ID: id, Err: nil}
 		}
-	}()
+	}(DB)
 
 	check := <-ch
 	if check.Err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": check.Err.Error(),
+			"query_error": check.Err.Error(),
 		})
 		return
 	}
