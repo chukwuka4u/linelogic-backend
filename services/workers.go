@@ -19,7 +19,7 @@ func CreateQueueDB(name string, department string, userID string, pool *pgxpool.
 
 	var id string
 	err = tx.QueryRow(Ctx,
-		`INSERT INTO queues (name, department, user_id) VALUES ($1, $2) RETURNING id`,
+		`INSERT INTO queues (name, department, user_id) VALUES ($1, $2, $3) RETURNING id`,
 		name, department, userID,
 	).Scan(&id)
 	if err != nil {
@@ -33,8 +33,38 @@ func CreateQueueDB(name string, department string, userID string, pool *pgxpool.
 	return id, nil
 }
 
+func BrowseQueueDB(pool *pgxpool.Pool) ([]mockBrowseQueue, error) {
+	if pool == nil {
+		fmt.Println("Error: Received a nil database pool pointer!")
+		return nil, fmt.Errorf("database pool is nil")
+	}
+
+	rows, err := pool.Query(Ctx,
+		`SELECT id, name, department FROM queues`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var queues []mockBrowseQueue
+	for rows.Next() {
+		var queue mockBrowseQueue
+		if err := rows.Scan(&queue.ID, &queue.QueueName, &queue.Department); err != nil {
+			return nil, err
+		}
+		queues = append(queues, queue)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return queues, nil
+}
+
 // JoinUpdateDB creates a membership record to track queue membership in Postgres.
-func JoinUpdateDB(queueID int, userID string) error {
+func JoinUpdateDB(queueID string, userID string) error {
 	tx, err := DB.Begin(Ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction failed: %w", err)
@@ -98,10 +128,11 @@ var schema = `
 
 	CREATE INDEX IF NOT EXISTS idx_queues_user_id ON queues(user_id);
 `
+var alterSchema = `ALTER TABLE users ADD COLUMN members TEXT[]`
 
 func MigrateAction() error {
 	_, err := DB.Exec(Ctx,
-		schema,
+		alterSchema,
 	)
 	if err != nil {
 		return err

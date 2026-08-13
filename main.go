@@ -58,6 +58,7 @@ func main() {
 	authRouter := router.Group("/").Use(authMiddleware(pasetoMaker))
 
 	authRouter.POST("/create-queue", services.CreateQueue)
+	authRouter.POST("/queues", services.BrowseQueue)
 	authRouter.POST("/read-queue", services.ReadQueue)
 	authRouter.POST("/delete-queue", services.DeleteQueue)
 	authRouter.POST("/remove-member", services.RemoveMember)

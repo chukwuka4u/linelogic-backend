@@ -3,10 +3,10 @@ package services
 import (
 	"fmt"
 	"log"
-	"math/rand/v2"
 	"net/http"
-	"strconv"
+	"time"
 
+	"github.com/chukwuka4u/linelogic-backend/token"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -15,7 +15,6 @@ import (
 type mockCreateQueue struct {
 	QueueName  string `json:"queueName" binding:"required"`
 	Department string `json:"department" binding:"required"`
-	UserID     string `json:"user_id" binding:"required"`
 }
 
 type mockPassId struct {
@@ -38,9 +37,15 @@ func CreateQueue(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	payload, exists := c.Get("authorization_payload")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "payload lost, retry request"})
+		return
+	}
+
 	var ch = make(chan string)
 	go func(pool *pgxpool.Pool) {
-		id, err := CreateQueueDB(req.QueueName, req.Department, req.UserID, pool)
+		id, err := CreateQueueDB(req.QueueName, req.Department, payload.(*token.Payload).UserID, pool)
 		if err != nil {
 			log.Printf("CreateQueueDB error: %v", err)
 			ch <- ""
@@ -67,6 +72,53 @@ func CreateQueue(c *gin.Context) {
 		"created": queueKey,
 		"id":      id,
 	})
+}
+
+type mockBrowseQueue struct {
+	ID         string    `json:"id" binding:"required"`
+	QueueName  string    `json:"queueName" binding:"required"`
+	Department string    `json:"department" binding:"required"`
+	WaitTime   time.Time `json:"waitTime"`
+	NoWaiting  int       `json:"noWaiting"`
+}
+
+func BrowseQueue(c *gin.Context) {
+	ls := make(chan []mockBrowseQueue)
+	go func(pool *pgxpool.Pool) {
+		// fetch queuename and department from DB for each queue ID in req.IDList
+		// waiting time will be calculated based on the number of members in the queue and the average service time
+		// For simplicity, let's assume each member takes 5 minutes on average to be served
+		// NoWaiting will be gotten from zset counting the number of members in a set.
+		queues, err := BrowseQueueDB(pool)
+		if err != nil {
+			log.Printf("BrowseQueueDB error: %v", err)
+			ls <- nil
+		} else {
+			ls <- queues
+		}
+	}(DB)
+	queueListPartial := <-ls
+	if queueListPartial == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to browse queues in DB"})
+		return
+	}
+
+	for i := range queueListPartial {
+		queueKey := fmt.Sprintf("queue:%s", queueListPartial[i].ID)
+		count, err := Rdb.ZCard(Ctx, queueKey).Result()
+		if err != nil {
+			log.Printf("Failed to get number of waiting members for queue %s: %v", queueKey, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get number of waiting members"})
+			return
+		}
+		queueListPartial[i].NoWaiting = int(count) - 1 // Subtracting 1 to exclude the "system:init" member
+
+		// Assuming each member takes 5 minutes on average to be served
+		waitTime := time.Duration(count*5) * time.Minute
+		queueListPartial[i].WaitTime = time.Now().Add(waitTime)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"queues": queueListPartial})
 }
 
 func ReadQueue(c *gin.Context) {
@@ -133,22 +185,21 @@ func JoinQueue(c *gin.Context) {
 		return
 	}
 
-	queueID, err := strconv.Atoi(req.ID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue id must be a valid number"})
+	payload, exists := c.Get("authorization_payload")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "payload lost, retry request"})
 		return
 	}
 
-	if err = JoinUpdateDB(queueID, req.MemberID); err != nil {
+	if err := JoinUpdateDB(req.ID, payload.(*token.Payload).UserID); err != nil {
 		log.Printf("JoinUpdateDB error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record queue membership"})
 		return
 	}
 
-	randomNumber := rand.IntN(50) + 1
-	members := []redis.Z{{Score: float64(randomNumber), Member: req.MemberID}}
+	members := []redis.Z{{Score: float64(time.Now().Unix()), Member: req.MemberID}}
 	queueKey := fmt.Sprintf("queue:%s", req.ID)
-	err = Rdb.ZAdd(Ctx, queueKey, members...).Err()
+	err := Rdb.ZAdd(Ctx, queueKey, members...).Err()
 	if err != nil {
 		log.Printf("Failed to add member to queue %s: %v", queueKey, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to join queue"})
@@ -156,7 +207,7 @@ func JoinQueue(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"joined member": req.MemberID,
+		"joined member": payload.(*token.Payload).UserID,
 		"to queue":      queueKey,
 	})
 }
