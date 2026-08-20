@@ -71,10 +71,12 @@ func JoinUpdateDB(queueID string, userID string) error {
 	}
 	defer tx.Rollback(Ctx)
 
+	// insert queue id into a member array of a user record in the users table
 	_, err = tx.Exec(Ctx,
-		`INSERT INTO members (queue_id, user_id) VALUES ($1, $2)`,
+		`UPDATE users SET members = array_append(members, $1) WHERE id = $2`,
 		queueID, userID,
 	)
+
 	if err != nil {
 		return fmt.Errorf("insert member failed: %w", err)
 	}

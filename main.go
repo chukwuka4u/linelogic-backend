@@ -23,6 +23,8 @@ func main() {
 	services.RedisConnect()
 	services.PostGresConnect()
 
+	hub := services.NewHub()
+
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
@@ -44,6 +46,9 @@ func main() {
 	router.GET("/migrate", services.Migration)
 	router.POST("/sync-user", services.SyncUser)
 	router.POST("/login", services.Login)
+	router.GET("/stream", func(c *gin.Context) {
+		services.StreamTicker(c, hub)
+	})
 
 	sym_key := os.Getenv("TOKEN_SYMMETRIC_KEY")
 	tokenMaker, err := token.NewPasetoMaker(sym_key)
@@ -62,7 +67,9 @@ func main() {
 	authRouter.POST("/read-queue", services.ReadQueue)
 	authRouter.POST("/delete-queue", services.DeleteQueue)
 	authRouter.POST("/remove-member", services.RemoveMember)
-	authRouter.POST("/join-queue", services.JoinQueue)
+	authRouter.POST("/join-queue", func(c *gin.Context) {
+		services.JoinQueue(c, hub)
+	})
 	authRouter.POST("/leave-queue", services.LeaveQueue)
 
 	myapi := os.Getenv("MY_API")

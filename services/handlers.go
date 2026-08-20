@@ -178,7 +178,7 @@ func RemoveMember(c *gin.Context) {
 	})
 }
 
-func JoinQueue(c *gin.Context) {
+func JoinQueue(c *gin.Context, h *Hub) {
 	var req mockMemberAction
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -194,6 +194,13 @@ func JoinQueue(c *gin.Context) {
 	if err := JoinUpdateDB(req.ID, payload.(*token.Payload).UserID); err != nil {
 		log.Printf("JoinUpdateDB error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record queue membership"})
+		return
+	}
+
+	ok := h.SendTo(req.ID, []byte(fmt.Sprintf(`{"event":"user_joined","user_id":"%s"}`, payload.(*token.Payload).UserID)))
+	if !ok {
+		log.Printf("Failed to send user_joined event to queue %s", req.ID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to notify queue of new member"})
 		return
 	}
 
@@ -239,5 +246,48 @@ func Migration(c *gin.Context) {
 		log.Printf("migration failed %s", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "migration failed"})
 		return
+	}
+}
+
+func StreamTicker(c *gin.Context, h *Hub) {
+	queueID := c.Request.URL.Query().Get("queue_id") // or pull from session/JWT
+	if queueID == "" {
+		http.Error(c.Writer, "missing queue_id", http.StatusBadRequest)
+		return
+	}
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Transfer-Encoding", "chunked")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		http.Error(c.Writer, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	client := &Client{
+		ID:   queueID,
+		Send: make(chan []byte, 10),
+	}
+	h.Register(client)
+	defer h.Unregister(client.ID)
+
+	log.Printf("admin %s connected", queueID)
+
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			log.Printf("admin %s disconnected", queueID)
+			return
+		case msg, ok := <-client.Send:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(c.Writer, "event: user_joined\n")
+			fmt.Fprintf(c.Writer, "data: %s\n\n", msg)
+			flusher.Flush()
+		}
 	}
 }
